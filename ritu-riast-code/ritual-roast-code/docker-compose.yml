@@ -1,0 +1,27 @@
+version: '3.5'
+
+services:
+  web:
+    image: abc
+    restart: unless-stopped
+    ports:
+      - '${HTTP_PORT:-80}:80'
+    environment:
+      DB_SERVER: 'ritualroast.c5w02gq8y809.us-east-2.rds.amazonaws.com'
+      DB_DATABASE: 'ritualroast'
+      SECRET_NAME: 'rds!db-0549634b-ebd9-4ebf-8f9e-2924ca4b2183'
+      AWS_REGION: 'us-east-2'
+    # networks:
+    #   - default
+    # links:
+    #   - db
+  # db:
+  #   image: mysql:latest
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: root1234
+  #     MYSQL_DATABASE: ritual_roast
+  #     MYSQL_PASSWORD: root1234
+  #   ports:
+  #     - "3306:3306"
+  #   networks:
+  #     - default
