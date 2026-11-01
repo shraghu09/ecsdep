@@ -1,81 +1,107 @@
+
 <?php
 
-
-/**
- * Include the aws php sdk
- * Follow the below instructions for deep dive
- * https://docs.aws.amazon.com/sdk-for-php/v3/developer-guide/getting-started_installation.html
- */
 require 'vendor/aws-autoloader.php';
 
-/**
- * Import SecretsManagerClient and AwsException to be used
- */
 use Aws\SecretsManager\SecretsManagerClient;
 use Aws\Exception\AwsException;
 
-/**
- * Create a SecretsManagerClient object
- */
-$client = new SecretsManagerClient([
-    'region' => $_ENV["AWS_REGION"],
-    'version' => 'latest',
-]);
+try {
 
+    // 1. AWS configuration
+    $region = getenv('AWS_REGION') ?: 'us-east-1';
+    $secret_name = getenv('SECRET_NAME');
 
-$secret_name = $_ENV["SECRET_NAME"];
-$db_server = $_ENV["DB_SERVER"];
-$database_name = $_ENV["DB_DATABASE"];
-
-
-/**
- * Get the Secret value from AWS Secret Manager
- * Note: Ensure proper IAM role is attached to ECS Task
- */
-$result = $client->getSecretValue([
-    'SecretId' => $secret_name,
-]);
-
-
-/**
- * result contains a few key-value about that secret.
- * The key named SecretString has the username and password encoded as a plain json string
- * Decode the json using json_decode function to get username and password
- */
-$myJSON = json_decode($result['SecretString']);
-
-$username = $myJSON->username;
-$password = $myJSON->password;
-$host = $db_server;
-$database = $database_name;
-
-$connection = new mysqli($host, $username, $password, $database);
-
-if ($connection->connect_error) {
-    echo "error in connection";
-} else {
-    $table = mysqli_real_escape_string($connection, "beverage_voting");
-
-    $checktable = mysqli_query($connection, "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_NAME = '$table' AND TABLE_SCHEMA = '$database'");
-
-    if (mysqli_num_rows($checktable) > 0) {
-        
-    } else {
-        $query = "CREATE TABLE `beverage_voting` (
-            `beverage_voting_id` int(11) NOT NULL AUTO_INCREMENT PRIMARY KEY,
-            `name` varchar(50) NOT NULL,
-            `email` varchar(50) NOT NULL,
-            `beverage` varchar(50) NOT NULL,
-            `created_on` datetime NOT NULL DEFAULT current_timestamp()
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci";
-
-        if ($connection->query($query) === TRUE) {
-            
-        } else {
-            echo json_encode(array('message' => 'Error on submit data', 'status' => 'error', 'sql_error' => mysqli_error($connection)));
-//            echo "Error creating table: " . $connection->error;
-            die();
-        }
+    if (empty($secret_name)) {
+        throw new Exception("SECRET_NAME environment variable is missing");
     }
+
+    // 2. Initialize Secrets Manager
+    $client = new SecretsManagerClient([
+        'region' => $region,
+        'version' => 'latest'
+    ]);
+
+    // 3. Retrieve current secret
+    error_log("Retrieving database credentials from Secrets Manager");
+
+    $result = $client->getSecretValue([
+        'SecretId' => $secret_name
+    ]);
+
+    if (empty($result['SecretString'])) {
+        throw new Exception("SecretString is empty");
+    }
+
+    $secret = json_decode($result['SecretString']);
+
+    if (
+        json_last_error() !== JSON_ERROR_NONE ||
+        empty($secret->username) ||
+        empty($secret->password) ||
+        empty($secret->host) ||
+        empty($secret->dbname)
+    ) {
+        throw new Exception("Invalid database secret JSON format");
+    }
+
+    // 4. Read database configuration from secret
+    $host = $secret->host;
+    $username = $secret->username;
+    $password = $secret->password;
+    $database = $secret->dbname;
+    $port = isset($secret->port) ? (int)$secret->port : 3306;
+
+    error_log("Database credentials retrieved successfully");
+
+    // 5. Enable MySQL error reporting
+    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
+    // 6. Connect to RDS
+    $connection = new mysqli(
+        $host,
+        $username,
+        $password,
+        $database,
+        $port
+    );
+
+    $connection->set_charset("utf8mb4");
+
+    error_log("RDS database connection successful");
+
+    // 7. Create table if it does not exist
+    $query = "CREATE TABLE IF NOT EXISTS beverage_voting (
+        beverage_voting_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(50) NOT NULL,
+        email VARCHAR(50) NOT NULL,
+        beverage VARCHAR(50) NOT NULL,
+        created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+    $connection->query($query);
+
+    error_log("Beverage voting table verified successfully");
+
+} catch (AwsException $e) {
+
+    error_log("AWS SECRETS MANAGER ERROR: " . $e->getMessage());
+
+    http_response_code(500);
+    echo "Unable to retrieve database credentials";
+
+} catch (mysqli_sql_exception $e) {
+
+    error_log("MYSQL DATABASE ERROR: " . $e->getMessage());
+
+    http_response_code(500);
+    echo "Database connection failed";
+
+} catch (Throwable $e) {
+
+    error_log("APPLICATION ERROR: " . $e->getMessage());
+
+    http_response_code(500);
+    echo "Application initialization failed";
 }
 ?>
